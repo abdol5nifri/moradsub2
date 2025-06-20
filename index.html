@@ -1,0 +1,132 @@
+<!-- 
+ملف الخادم (server.js) باستخدام Express وyoutube-transcript-plus:
+----------------------------------------------------------------
+const express = require('express');
+const { fetchTranscript } = require('youtube-transcript-plus');
+const app = express();
+const path = require('path');
+
+// دالة لمعرّف الفيديو من رابط اليوتيوب
+function getVideoID(url) {
+  const match = url.match(/(?:v=|youtu\.be\/)([A-Za-z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
+// خدمة استرجاع قائمة اللغات المتوفرة
+app.get('/api/transcripts', async (req, res) => {
+  const url = req.query.url || '';
+  const videoId = getVideoID(url);
+  if (!videoId) return res.json({ languages: [] });
+  const langsToTry = ['ar','en','fr','es']; // اللغات الشائعة
+  const available = [];
+  for (let lang of langsToTry) {
+    try {
+      // نجرب جلب الترجمة لكل لغة
+      await fetchTranscript(videoId, { lang: lang });
+      available.push(lang);
+    } catch(e) {
+      // تجاهل اللغات غير المتوفرة
+    }
+  }
+  res.json({ languages: available });
+});
+
+// خدمة الحصول على الترجمة كنص
+app.get('/api/transcript', async (req, res) => {
+  const url = req.query.url || '';
+  const lang = req.query.lang || '';
+  const videoId = getVideoID(url);
+  if (!videoId || !lang) return res.status(400).send('Bad Request');
+  try {
+    const segments = await fetchTranscript(videoId, { lang: lang });
+    // دمج جميع أجزاء النص بفواصل الأسطر
+    const text = segments.map(s => s.text).join("\n");
+    res.json({ text: text });
+  } catch(err) {
+    res.status(500).send('Error fetching transcript');
+  }
+});
+
+// الخدمة الثابتة لملف HTML نفسه
+app.use(express.static(path.join(__dirname, 'public')));
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`✅ Server is running on port ${PORT}`);
+});
+-->
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <title>تحميل ترجمات فيديو يوتيوب</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 20px;
+      background: #f9f9f9;
+      color: #333;
+    }
+    h1 { text-align: center; }
+    input, button {
+      font-size: 1em; padding: 8px;
+    }
+    button { cursor: pointer; }
+    #languages button {
+      margin: 4px 0;
+      width: 100%;
+      text-align: right;
+    }
+    #languages a {
+      color: #0066cc;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>تحميل ترجمات فيديو يوتيوب</h1>
+  <p>أدخل رابط فيديو يوتيوب ثم اضغط "احصل على الترجمات":</p>
+  <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=..." style="width:80%;">
+  <button id="fetchBtn">احصل على الترجمات</button>
+  <div id="languages"></div>
+
+  <script>
+    const langNames = { ar: 'العربية', en: 'الإنجليزية', fr: 'الفرنسية', es: 'الإسبانية' };
+    document.getElementById('fetchBtn').onclick = async () => {
+      const videoUrl = document.getElementById('urlInput').value.trim();
+      if (!videoUrl) {
+        alert('الرجاء إدخال رابط فيديو صالح.');
+        return;
+      }
+      // طلب قائمة اللغات من الخادم
+      const resp = await fetch('/api/transcripts?url=' + encodeURIComponent(videoUrl));
+      const data = await resp.json();
+      const langs = data.languages || [];
+      const container = document.getElementById('languages');
+      container.innerHTML = ''; 
+      if (langs.length === 0) {
+        container.innerHTML = '<p>لا توجد ترجمات متوفرة لهذا الفيديو.</p>';
+        return;
+      }
+      langs.forEach(lang => {
+        const btn = document.createElement('button');
+        btn.textContent = 'تحميل الترجمة (' + (langNames[lang] || lang) + ')';
+        btn.dataset.lang = lang;
+        btn.onclick = async () => {
+          const res = await fetch('/api/transcript?url=' + encodeURIComponent(videoUrl) + '&lang=' + lang);
+          const tdata = await res.json();
+          const text = tdata.text || '';
+          const blob = new Blob([text], { type: 'text/plain' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = `transcript_${lang}.txt`;
+          document.body.appendChild(link);
+          link.click();
+          link.remove();
+        };
+        container.appendChild(btn);
+      });
+    };
+  </script>
+</body>
+</html>
